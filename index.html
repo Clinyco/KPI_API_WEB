@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KPI Comisiones — Octubre</title>
+  <style>
+    :root{ --bg:#0f172a; --card:#111827; --text:#e5e7eb; --muted:#94a3b8; --accent:#22c55e; }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); }
+    .container{ max-width:960px; margin:40px auto; padding:0 16px; }
+    .card{ background:linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02)); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:20px; box-shadow:0 10px 30px rgba(0,0,0,.25); }
+    h1{ margin:0 0 8px; font-size:28px; letter-spacing:.2px; }
+    .sub{ color:var(--muted); font-size:14px; margin-bottom:16px; }
+    .toolbar{ display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 16px; }
+    button, input{ background:#0b1220; color:var(--text); border:1px solid rgba(255,255,255,.1); padding:10px 12px; border-radius:10px; font-size:14px; }
+    button:hover{ border-color:rgba(255,255,255,.2); cursor:pointer; }
+    table{ width:100%; border-collapse:collapse; }
+    thead th{ text-align:left; font-size:12px; color:var(--muted); font-weight:600; padding:10px; border-bottom:1px solid rgba(255,255,255,.1); }
+    tbody td{ padding:12px 10px; border-bottom:1px dashed rgba(255,255,255,.06); }
+    tfoot td{ padding:14px 10px; font-weight:700; border-top:2px solid rgba(255,255,255,.15); }
+    .right{ text-align:right; }
+    .muted{ color:var(--muted); }
+    .tests{ margin-top:10px; font-size:12px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>KPI Comisiones — Octubre</h1>
+      <div class="sub">Actualizado: <span id="updatedAt">—</span> · <span id="count">0</span> colaboradores</div>
+
+      <div class="toolbar">
+        <input id="search" placeholder="Filtrar por colaborador…" />
+        <button id="refresh">Actualizar</button>
+        <button id="export">Exportar CSV</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Colaborador</th>
+            <th class="right">Total</th>
+          </tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td class="muted" colspan="2">Cargando…</td></tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td>Total general</td>
+            <td id="grand" class="right">$0</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div id="testOutput" class="tests" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <script>
+    // ======== TU ENDPOINT JSON (Apps Script Web App) ========
+    const KPI_API_URL = 'https://script.google.com/a/macros/clinyco.cl/s/AKfycbyUkybAJ1uenOkUmWvZ5LnnirrLhVPcn0TGFQya6-7PrnjQFW_T-XRpVDTU-d99fEErRw/exec';
+
+    const fmtCLP = new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 });
+    const fmtISO = (s)=> s ? new Date(s).toLocaleString('es-CL', { dateStyle:'medium', timeStyle:'short' }) : '—';
+
+    const elUpdated = document.getElementById('updatedAt');
+    const elRows    = document.getElementById('rows');
+    const elGrand   = document.getElementById('grand');
+    const elCount   = document.getElementById('count');
+    const elSearch  = document.getElementById('search');
+    const elTests   = document.getElementById('testOutput');
+
+    let cache = { summary: [], grandTotal: 0, updatedAt: null };
+
+    // --- Helpers reutilizables ---
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
+    }
+
+    function sortedSummary(list){
+      const arr = Array.isArray(list) ? [...list] : [];
+      arr.sort((a,b)=> (Number(b.total)||0) - (Number(a.total)||0));
+      return arr;
+    }
+
+    function buildCSVFromSummary(summary){
+      const rows = [['Colaborador','Total']].concat(
+        (summary||[]).map(s => [s.collab, Number(s.total||0)])
+      );
+      return rows.map(r => r.map(v => '"'+String(v).replaceAll('"','""')+'"').join(',')).join('\n');
+    }
+
+    // --- Render principal ---
+    function render(){
+      const q = (elSearch.value || '').trim().toLowerCase();
+      let list = sortedSummary(cache.summary);
+      if (q) list = list.filter(x => String(x.collab||'').toLowerCase().includes(q));
+
+      elUpdated.textContent = fmtISO(cache.updatedAt);
+      elGrand.textContent   = fmtCLP.format(Number(cache.grandTotal||0));
+      elCount.textContent   = list.length;
+
+      if (!list.length){
+        elRows.innerHTML = `<tr><td class="muted" colspan="2">Sin datos</td></tr>`;
+        return;
+      }
+
+      elRows.innerHTML = list.map(item => `
+        <tr>
+          <td>${escapeHtml(item.collab||'')}</td>
+          <td class="right">${fmtCLP.format(Number(item.total||0))}</td>
+        </tr>
+      `).join('');
+    }
+
+    // --- Carga (JSONP primero para evitar CORS en GitHub Pages) ---
+    function load(){
+      elRows.innerHTML = `<tr><td class="muted" colspan="2">Cargando…</td></tr>`;
+      const url = KPI_API_URL + (KPI_API_URL.includes('?') ? '&' : '?') + 'callback=__kpi_cb';
+      jsonpLoad(url);
+    }
+
+    // JSONP utilitario
+    function jsonpLoad(src){
+      window.__kpi_cb = function(data){ cache = data || cache; render(); cleanup(); };
+      const s = document.createElement('script');
+      s.src = src; s.id = '__kpi_jsonp__';
+      s.onerror = function(){ elRows.innerHTML = `<tr><td class="muted" colspan="2">No se pudo cargar datos (CORS/JSONP).</td></tr>`; cleanup(); };
+      document.head.appendChild(s);
+      function cleanup(){ const el = document.getElementById('__kpi_jsonp__'); if (el) el.remove(); delete window.__kpi_cb; }
+    }
+
+    // --- Exportar ---
+    function exportCSV(){
+      const csv = buildCSVFromSummary(cache.summary||[]);
+      const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+      const url  = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'kpi_comisiones.csv'; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // --- Tests ligeros (smoke tests) ---
+    (function runSmokeTests(){
+      const results = [];
+      function assert(name, cond){ results.push((cond? '✅ ' : '❌ ') + name); }
+
+      // Test escapeHtml
+      assert('escapeHtml escapa <>&\"\' , escapeHtml('<>&"\' ) === '&lt;&gt;&amp;&quot;&#39;');
+
+      // Test ordenamiento
+      const sample = [{collab:'B', total:10},{collab:'A', total:50},{collab:'C', total:30}];
+      const sorted = sortedSummary(sample);
+      assert('sortedSummary ordena desc por total', sorted[0].total===50 && sorted[1].total===30 && sorted[2].total===10);
+
+      // Test CSV generator
+      const csv = buildCSVFromSummary([{collab:'X', total:1000},{collab:'Y', total:0}]);
+      assert('CSV contiene encabezados', csv.startsWith('"Colaborador","Total"'));
+      assert('CSV contiene filas', csv.includes('"X","1000"') && csv.includes('"Y","0"'));
+
+      // Mostrar en UI (opcional) y consola
+      const text = results.join(' · ');
+      if (elTests) elTests.textContent = text;
+      console.log('[Tests]', text);
+    })();
+
+    // --- Eventos UI ---
+    document.getElementById('refresh').addEventListener('click', load);
+    document.getElementById('export').addEventListener('click', exportCSV);
+    document.getElementById('search').addEventListener('input', render);
+
+    // --- Inicio ---
+    load();
+    setInterval(load, 10 * 60 * 1000); // auto-refresh cada 10 min
+  </script>
+</body>
+</html>
